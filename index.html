@@ -1,0 +1,1160 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Orb Survivor (Canvas)</title>
+  <style>
+    :root { --bg:#070912; --panel:rgba(15,18,30,.72); --text:#eaf0ff; --muted:#aab6d6; }
+    html, body { margin:0; height:100%; background:var(--bg); overflow:hidden; touch-action:none; }
+    canvas { display:block; width:100vw; height:100vh; }
+
+    .ui {
+      position:fixed; inset:0;
+      font-family: -apple-system, system-ui, Segoe UI, Roboto, Arial, sans-serif;
+      color:var(--text);
+      pointer-events:none;
+    }
+    .topbar {
+      position:absolute; left:12px; right:12px; top:12px;
+      display:flex; gap:10px; align-items:center; justify-content:space-between;
+    }
+    .pill {
+      background:var(--panel);
+      backdrop-filter: blur(8px);
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:14px;
+      padding:10px 12px;
+      display:flex;
+      gap:10px;
+      align-items:center;
+      pointer-events:none;
+      box-shadow: 0 8px 28px rgba(0,0,0,.25);
+      max-width: 78vw;
+      overflow:hidden;
+      white-space:nowrap;
+      text-overflow:ellipsis;
+    }
+    .leftgroup { display:flex; gap:10px; min-width:0; }
+    .btn {
+      pointer-events:auto;
+      user-select:none;
+      -webkit-user-select:none;
+      background:var(--panel);
+      border:1px solid rgba(255,255,255,.10);
+      color:var(--text);
+      border-radius:14px;
+      padding:10px 12px;
+      font-weight:600;
+      box-shadow: 0 8px 28px rgba(0,0,0,.25);
+    }
+    .btn:active { transform: translateY(1px); }
+    .hint {
+      position:absolute; left:12px; right:12px; bottom:14px;
+      display:flex; justify-content:center;
+    }
+    .hint .pill { pointer-events:none; text-align:center; max-width: 92vw; }
+
+    .overlay {
+      position:absolute; inset:0;
+      display:none;
+      align-items:center; justify-content:center;
+      background: rgba(0,0,0,.42);
+      backdrop-filter: blur(2px);
+      pointer-events:auto;
+    }
+    .card {
+      width:min(520px, 92vw);
+      background: rgba(15,18,30,.88);
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:18px;
+      padding:14px;
+      box-shadow: 0 22px 70px rgba(0,0,0,.5);
+    }
+    .card h2 { margin:4px 0 8px; font-size:20px; letter-spacing:.2px; }
+    .card p  { margin:0 0 10px; color:var(--muted); font-size:14px; line-height:1.35; }
+    .grid {
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:10px;
+      margin-top:10px;
+    }
+    .choice {
+      text-align:left;
+      padding:12px 12px;
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
+      color:var(--text);
+      font-weight:700;
+    }
+    .choice small {
+      display:block;
+      margin-top:4px;
+      font-weight:600;
+      color:var(--muted);
+    }
+    .row { display:flex; gap:10px; align-items:center; justify-content:space-between; }
+    .badge { font-size:12px; color:var(--muted); }
+    .big { font-size:24px; font-weight:900; letter-spacing:.2px; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="ui">
+  <div class="topbar">
+    <div class="leftgroup" style="min-width:0;">
+      <div class="pill" id="stats">…</div>
+      <div class="pill" id="score">…</div>
+    </div>
+    <button class="btn" id="pauseBtn">⏸</button>
+  </div>
+
+  <div class="hint">
+    <div class="pill" id="hint">Веди пальцем по экрану. Авто-стрельба включена.</div>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <div class="card" id="card">
+      <!-- filled by JS -->
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ---------- Canvas setup ----------
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  function resize() {
+    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    const w = Math.floor(innerWidth * dpr);
+    const h = Math.floor(innerHeight * dpr);
+    canvas.width = w; canvas.height = h;
+    canvas._dpr = dpr;
+  }
+  addEventListener('resize', resize, { passive:true });
+  resize();
+
+  // ---------- UI ----------
+  const elStats = document.getElementById('stats');
+  const elScore = document.getElementById('score');
+  const elHint  = document.getElementById('hint');
+  const elPause = document.getElementById('pauseBtn');
+  const overlay = document.getElementById('overlay');
+  const card    = document.getElementById('card');
+
+  const LS_KEY = 'orb_survivor_highscore_v1';
+  let hiScore = Number(localStorage.getItem(LS_KEY) || 0);
+
+  function setHint(text, ms=2200) {
+    elHint.textContent = text;
+    elHint.style.opacity = '1';
+    if (setHint._t) clearTimeout(setHint._t);
+    setHint._t = setTimeout(() => { elHint.style.opacity = '0.85'; }, ms);
+  }
+
+  // ---------- Helpers ----------
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const dist2 = (ax,ay,bx,by)=>{ const dx=ax-bx, dy=ay-by; return dx*dx+dy*dy; };
+  const rand = (a,b)=>a+Math.random()*(b-a);
+  const pick = (arr)=>arr[(Math.random()*arr.length)|0];
+
+  function formatTime(sec) {
+    sec = Math.max(0, sec|0);
+    const m = (sec/60)|0;
+    const s = sec%60;
+    return `${m}:${String(s).padStart(2,'0')}`;
+  }
+
+  // ---------- Input (pointer) ----------
+  const input = {
+    down:false,
+    x: innerWidth*0.5,
+    y: innerHeight*0.6,
+    lastTap: 0
+  };
+
+  function onPointerDown(e) {
+    e.preventDefault();
+    input.down = true;
+    input.x = e.clientX; input.y = e.clientY;
+
+    // double tap dash
+    const now = performance.now();
+    if (now - input.lastTap < 280) tryDash();
+    input.lastTap = now;
+  }
+  function onPointerMove(e) {
+    if (!input.down) return;
+    e.preventDefault();
+    input.x = e.clientX; input.y = e.clientY;
+  }
+  function onPointerUp(e) {
+    e.preventDefault();
+    input.down = false;
+  }
+
+  // attach to body to avoid scroll
+  document.body.addEventListener('pointerdown', onPointerDown, { passive:false });
+  document.body.addEventListener('pointermove', onPointerMove, { passive:false });
+  document.body.addEventListener('pointerup', onPointerUp, { passive:false });
+  document.body.addEventListener('pointercancel', onPointerUp, { passive:false });
+
+  // ---------- Game state ----------
+  let paused = false;
+  let gameOver = false;
+
+  const world = {
+    t: 0,
+    dt: 0,
+    timeAlive: 0,
+    difficulty: 1,
+    wave: 1,
+    nextBossAt: 180, // seconds
+    bossAlive: false,
+    shake: 0
+  };
+
+  const player = {
+    x: innerWidth*0.5,
+    y: innerHeight*0.6,
+    vx: 0, vy: 0,
+    r: 14,
+    hp: 100, hpMax: 100,
+    shield: 0, shieldMax: 0,
+    regen: 0,
+    speed: 520, // px/sec (screen space)
+    score: 0,
+
+    // combat
+    fireRate: 7.0,   // shots/sec
+    bulletSpeed: 900,
+    damage: 12,
+    crit: 0.06,
+    pierce: 0,
+    knock: 22,
+
+    // extras
+    magnet: 0,
+    orbiters: 0,
+    orbAngle: 0,
+    dashCd: 0,
+    dashPower: 900
+  };
+
+  let level = 1;
+  let xp = 0;
+  let xpNext = 40;
+
+  const bullets = [];
+  const enemies = [];
+  const pickups = [];
+  const particles = [];
+
+  function resetGame() {
+    world.t = 0; world.dt = 0; world.timeAlive = 0; world.difficulty = 1; world.wave = 1;
+    world.nextBossAt = 180; world.bossAlive = false; world.shake = 0;
+    paused = false; gameOver = false;
+
+    player.x = innerWidth*0.5; player.y = innerHeight*0.6; player.vx = 0; player.vy = 0;
+    player.r = 14; player.hpMax = 100; player.hp = player.hpMax;
+    player.shieldMax = 0; player.shield = 0;
+    player.regen = 0;
+    player.speed = 520;
+    player.score = 0;
+    player.fireRate = 7.0; player.bulletSpeed = 900; player.damage = 12;
+    player.crit = 0.06; player.pierce = 0; player.knock = 22;
+    player.magnet = 0; player.orbiters = 0; player.orbAngle = 0;
+    player.dashCd = 0; player.dashPower = 900;
+
+    level = 1; xp = 0; xpNext = 40;
+
+    bullets.length = 0;
+    enemies.length = 0;
+    pickups.length = 0;
+    particles.length = 0;
+
+    overlay.style.display = 'none';
+    setHint('Веди пальцем по экрану. Двойной тап — рывок (dash).', 2600);
+  }
+
+  // ---------- Spawning ----------
+  function spawnEnemy(kind='grunt') {
+    const w = innerWidth, h = innerHeight;
+    const side = (Math.random()*4)|0;
+    let x,y;
+    if (side===0) { x = rand(-60, w+60); y = -60; }
+    if (side===1) { x = w+60; y = rand(-60, h+60); }
+    if (side===2) { x = rand(-60, w+60); y = h+60; }
+    if (side===3) { x = -60; y = rand(-60, h+60); }
+
+    const base = {
+      x,y, vx:0, vy:0,
+      hit:0,
+      kx:0, ky:0,
+      kind,
+      dead:false
+    };
+
+    // scale by difficulty
+    const d = world.difficulty;
+
+    if (kind==='grunt') {
+      const hp = 26 + d*9;
+      enemies.push({ ...base, r: 16, hp, hpMax: hp, speed: 110 + d*12, dmg: 10 + d*1.2, xp: 8, color: 0 });
+    } else if (kind==='runner') {
+      const hp = 18 + d*6;
+      enemies.push({ ...base, r: 13, hp, hpMax: hp, speed: 165 + d*18, dmg: 9 + d*1.2, xp: 9, color: 1 });
+    } else if (kind==='tank') {
+      const hp = 62 + d*18;
+      enemies.push({ ...base, r: 22, hp, hpMax: hp, speed: 78 + d*8, dmg: 14 + d*1.4, xp: 16, color: 2 });
+    } else if (kind==='spitter') {
+      const hp = 22 + d*7;
+      enemies.push({ ...base, r: 15, hp, hpMax: hp, speed: 98 + d*10, dmg: 9 + d*1.2, xp: 12, color: 3, shootCd: rand(1.0,2.2) });
+    }
+  }
+
+  function spawnBoss() {
+    const w = innerWidth, h = innerHeight;
+    const x = rand(0.15*w, 0.85*w);
+    const y = -120;
+    const d = world.difficulty;
+
+    const hp = 900 + d*280;
+    enemies.push({
+      x, y, vx:0, vy:0,
+      r: 46,
+      hp, hpMax: hp,
+      speed: 62 + d*6,
+      dmg: 22 + d*2.2,
+      xp: 220,
+      kind:'boss',
+      dead:false,
+      hit:0,
+      kx:0, ky:0,
+      phase: 0,
+      shootCd: 0.9,
+      slamCd: 3.2
+    });
+    world.bossAlive = true;
+    setHint('⚠️ БОСС! Держись подальше, используй dash.', 2600);
+  }
+
+  // ---------- Combat ----------
+  let shootAcc = 0;
+  function autoShoot(dt) {
+    shootAcc += dt * player.fireRate;
+    while (shootAcc >= 1) {
+      shootAcc -= 1;
+
+      // find nearest enemy
+      let best = null, bestD = 1e18;
+      for (const e of enemies) {
+        if (e.dead) continue;
+        const d2 = dist2(player.x, player.y, e.x, e.y);
+        if (d2 < bestD) { bestD = d2; best = e; }
+      }
+      if (!best) return;
+
+      const dx = best.x - player.x;
+      const dy = best.y - player.y;
+      const len = Math.hypot(dx,dy) || 1;
+      const ux = dx/len, uy = dy/len;
+
+      bullets.push({
+        x: player.x + ux*(player.r+4),
+        y: player.y + uy*(player.r+4),
+        vx: ux * player.bulletSpeed,
+        vy: uy * player.bulletSpeed,
+        r: 4.2,
+        dmg: player.damage,
+        pierce: player.pierce,
+        life: 1.2,
+        from:'player'
+      });
+    }
+  }
+
+  function enemyShoot(e) {
+    // spitters + boss
+    const dx = player.x - e.x;
+    const dy = player.y - e.y;
+    const len = Math.hypot(dx,dy) || 1;
+    const ux = dx/len, uy = dy/len;
+
+    bullets.push({
+      x: e.x + ux*(e.r+6),
+      y: e.y + uy*(e.r+6),
+      vx: ux * (520 + world.difficulty*25),
+      vy: uy * (520 + world.difficulty*25),
+      r: e.kind==='boss' ? 6.2 : 5.2,
+      dmg: e.dmg,
+      pierce: 0,
+      life: 2.0,
+      from:'enemy'
+    });
+  }
+
+  function addParticles(x,y,n=10, power=1) {
+    for (let i=0;i<n;i++) {
+      const a = Math.random()*Math.PI*2;
+      const s = rand(60, 340) * power;
+      particles.push({
+        x,y,
+        vx: Math.cos(a)*s,
+        vy: Math.sin(a)*s,
+        r: rand(1.2, 2.8),
+        life: rand(0.35, 0.7),
+        t: 0
+      });
+    }
+  }
+
+  function dropPickup(x,y) {
+    // XP gems common, heals rare
+    const roll = Math.random();
+    if (roll < 0.86) {
+      pickups.push({ x,y, vx:0, vy:0, r: 8, kind:'xp', value: 10 + (world.difficulty|0), t:0 });
+    } else {
+      pickups.push({ x,y, vx:0, vy:0, r: 10, kind:'heal', value: 20, t:0 });
+    }
+  }
+
+  // ---------- Upgrades ----------
+  const upgradePool = [
+    {
+      id:'firerate',
+      name:'Скорострельность +18%',
+      desc:'Чаще выстрелы (ощутимо на толпах).',
+      apply: ()=>{ player.fireRate *= 1.18; }
+    },
+    {
+      id:'damage',
+      name:'Урон +22%',
+      desc:'Быстрее убиваешь толстяков и босса.',
+      apply: ()=>{ player.damage *= 1.22; }
+    },
+    {
+      id:'bulletspeed',
+      name:'Скорость пуль +25%',
+      desc:'Легче держать дистанцию, меньше промахов.',
+      apply: ()=>{ player.bulletSpeed *= 1.25; }
+    },
+    {
+      id:'hp',
+      name:'+25 к максимуму HP',
+      desc:'Плюс выживаемость. Лечит на 25 сразу.',
+      apply: ()=>{ player.hpMax += 25; player.hp = Math.min(player.hpMax, player.hp + 25); }
+    },
+    {
+      id:'shield',
+      name:'Щит +30',
+      desc:'Поглощает урон первым (перезаряжается между ударами).',
+      apply: ()=>{ player.shieldMax += 30; player.shield = player.shieldMax; }
+    },
+    {
+      id:'regen',
+      name:'Реген +0.8 HP/сек',
+      desc:'Медленно, но стабильно отхиливает.',
+      apply: ()=>{ player.regen += 0.8; }
+    },
+    {
+      id:'speed',
+      name:'Скорость +12%',
+      desc:'Проще кайтануть толпу.',
+      apply: ()=>{ player.speed *= 1.12; }
+    },
+    {
+      id:'pierce',
+      name:'Пробитие +1',
+      desc:'Пули пробивают ещё одного врага.',
+      apply: ()=>{ player.pierce += 1; }
+    },
+    {
+      id:'crit',
+      name:'Критшанс +4%',
+      desc:'Иногда наносишь x2.2 урон.',
+      apply: ()=>{ player.crit = Math.min(0.45, player.crit + 0.04); }
+    },
+    {
+      id:'magnet',
+      name:'Магнит +40',
+      desc:'Сам притягиваешь кристаллы XP.',
+      apply: ()=>{ player.magnet += 40; }
+    },
+    {
+      id:'orb',
+      name:'Орбитальный шар +1',
+      desc:'Постоянно бьёт вокруг тебя.',
+      apply: ()=>{ player.orbiters += 1; }
+    },
+    {
+      id:'dash',
+      name:'Dash: откат -18%',
+      desc:'Чаще можно делать рывок (двойной тап).',
+      apply: ()=>{ player.dashCd = Math.max(0, player.dashCd - 0.18); player.dashPower *= 1.06; }
+    }
+  ];
+
+  function openLevelUp() {
+    paused = true;
+
+    // pick 3 distinct
+    const picks = [];
+    const used = new Set();
+    let safety = 80;
+    while (picks.length < 3 && safety-- > 0) {
+      const u = pick(upgradePool);
+      if (used.has(u.id)) continue;
+      used.add(u.id);
+      picks.push(u);
+    }
+
+    overlay.style.display = 'flex';
+    card.innerHTML = `
+      <div class="row">
+        <h2>Апгрейд! Уровень ${level}</h2>
+        <div class="badge">выбери 1 из 3</div>
+      </div>
+      <p>Сложность растёт со временем. Собирай XP, держи дистанцию, используй dash на угрозах.</p>
+      <div class="grid">
+        ${picks.map((u,i)=>`
+          <button class="choice" data-i="${i}">
+            ${u.name}
+            <small>${u.desc}</small>
+          </button>
+        `).join('')}
+      </div>
+    `;
+
+    card.querySelectorAll('.choice').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.i);
+        const u = picks[i];
+        u.apply();
+        overlay.style.display = 'none';
+        paused = false;
+        setHint(`Получено: ${u.name}`, 1800);
+      }, { passive:true });
+    });
+  }
+
+  // ---------- Dash ----------
+  let dashCooldown = 2.4; // base seconds
+  let dashReady = 0;
+
+  function tryDash() {
+    if (paused || gameOver) return;
+    const now = world.timeAlive;
+    if (now < dashReady) return;
+
+    // dash direction: from player -> finger, or current velocity
+    const dx = (input.x - player.x);
+    const dy = (input.y - player.y);
+    let len = Math.hypot(dx,dy);
+    if (len < 20) {
+      len = Math.hypot(player.vx, player.vy);
+      if (len < 1) return;
+      const ux = player.vx/len, uy = player.vy/len;
+      player.vx += ux * player.dashPower;
+      player.vy += uy * player.dashPower;
+    } else {
+      const ux = dx/len, uy = dy/len;
+      player.vx += ux * player.dashPower;
+      player.vy += uy * player.dashPower;
+    }
+
+    dashReady = now + dashCooldown * 0.92;
+    world.shake = Math.min(12, world.shake + 8);
+    addParticles(player.x, player.y, 18, 1.25);
+  }
+
+  // ---------- Pause / overlays ----------
+  function openPause() {
+    paused = true;
+    overlay.style.display = 'flex';
+    card.innerHTML = `
+      <div class="row">
+        <h2>Пауза</h2>
+        <div class="badge">${formatTime(world.timeAlive)} • Score ${player.score|0}</div>
+      </div>
+      <p>Управление: веди пальцем. Двойной тап — dash. Авто-стрельба всегда включена.</p>
+      <div class="grid">
+        <button class="choice" id="resumeBtn">Продолжить</button>
+        <button class="choice" id="restartBtn">Начать заново</button>
+      </div>
+    `;
+    document.getElementById('resumeBtn').onclick = () => {
+      overlay.style.display = 'none';
+      paused = false;
+    };
+    document.getElementById('restartBtn').onclick = () => {
+      resetGame();
+    };
+  }
+
+  function openGameOver() {
+    gameOver = true;
+    paused = true;
+    hiScore = Math.max(hiScore, player.score|0);
+    localStorage.setItem(LS_KEY, String(hiScore));
+
+    overlay.style.display = 'flex';
+    card.innerHTML = `
+      <div class="row">
+        <h2>Ты пал 😵</h2>
+        <div class="badge">выжил ${formatTime(world.timeAlive)} </div>
+      </div>
+      <p>
+        Score: <span class="big">${player.score|0}</span><br/>
+        High score: <span class="big">${hiScore|0}</span>
+      </p>
+      <div class="grid">
+        <button class="choice" id="restartBtn2">Restart</button>
+      </div>
+    `;
+    document.getElementById('restartBtn2').onclick = () => resetGame();
+  }
+
+  elPause.addEventListener('click', () => {
+    if (gameOver) return;
+    if (!paused) openPause();
+    else { overlay.style.display = 'none'; paused = false; }
+  }, { passive:true });
+
+  // ---------- Damage / collision ----------
+  function playerTakeDamage(dmg) {
+    if (gameOver) return;
+
+    // shield first
+    if (player.shield > 0) {
+      const used = Math.min(player.shield, dmg);
+      player.shield -= used;
+      dmg -= used;
+    }
+    if (dmg > 0) player.hp -= dmg;
+
+    world.shake = Math.min(18, world.shake + 10);
+    addParticles(player.x, player.y, 14, 1.1);
+
+    if (player.hp <= 0) openGameOver();
+  }
+
+  function dealDamageToEnemy(e, dmg, kx, ky) {
+    e.hp -= dmg;
+    e.hit = 0.12;
+    e.kx += kx; e.ky += ky;
+
+    if (e.hp <= 0 && !e.dead) {
+      e.dead = true;
+
+      // score + xp + pickups
+      player.score += 10 + (e.kind==='boss' ? 260 : 0) + (e.kind==='tank' ? 18 : 0);
+      gainXP(e.xp || 8);
+
+      addParticles(e.x, e.y, e.kind==='boss' ? 60 : 18, e.kind==='boss' ? 1.5 : 1);
+      dropPickup(e.x, e.y);
+
+      if (e.kind === 'boss') {
+        world.bossAlive = false;
+        world.nextBossAt = world.timeAlive + 210;
+        setHint('Босс повержен. Темп растёт дальше.', 2400);
+      }
+    }
+  }
+
+  function gainXP(amount) {
+    xp += amount;
+    while (xp >= xpNext) {
+      xp -= xpNext;
+      level += 1;
+      xpNext = Math.floor(xpNext * 1.22 + 12);
+      openLevelUp();
+    }
+  }
+
+  // ---------- Update loop ----------
+  let last = performance.now();
+
+  function update(now) {
+    const rawDt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    if (!paused) {
+      world.dt = rawDt;
+      world.timeAlive += rawDt;
+      world.difficulty = 1 + world.timeAlive / 70; // ramp
+
+      // spawn logic (waves)
+      const d = world.difficulty;
+      const baseRate = 0.9 + d*0.22; // enemies/sec
+      world.t += rawDt * baseRate;
+
+      while (world.t >= 1) {
+        world.t -= 1;
+        const roll = Math.random();
+        if (roll < 0.58) spawnEnemy('grunt');
+        else if (roll < 0.80) spawnEnemy('runner');
+        else if (roll < 0.93) spawnEnemy('spitter');
+        else spawnEnemy('tank');
+      }
+
+      // boss timing
+      if (!world.bossAlive && world.timeAlive >= world.nextBossAt) spawnBoss();
+
+      // regen
+      if (player.regen > 0 && player.hp > 0) {
+        player.hp = Math.min(player.hpMax, player.hp + player.regen * rawDt);
+      }
+
+      // shield trickle recharge: small passive if exists
+      if (player.shieldMax > 0) {
+        player.shield = Math.min(player.shieldMax, player.shield + 9.5 * rawDt);
+      }
+
+      // move player towards finger
+      const tx = input.x;
+      const ty = input.y;
+      const dx = tx - player.x;
+      const dy = ty - player.y;
+
+      // acceleration and friction
+      const accel = player.speed * 3.0;
+      player.vx += clamp(dx, -200, 200) * accel * rawDt * 0.012;
+      player.vy += clamp(dy, -200, 200) * accel * rawDt * 0.012;
+
+      // mild drag
+      player.vx *= Math.pow(0.0009, rawDt);
+      player.vy *= Math.pow(0.0009, rawDt);
+
+      // cap speed
+      const vlen = Math.hypot(player.vx, player.vy);
+      const vmax = player.speed * 1.25;
+      if (vlen > vmax) {
+        player.vx = player.vx / vlen * vmax;
+        player.vy = player.vy / vlen * vmax;
+      }
+
+      player.x += player.vx * rawDt;
+      player.y += player.vy * rawDt;
+
+      // keep inside screen
+      player.x = clamp(player.x, 16, innerWidth - 16);
+      player.y = clamp(player.y, 16, innerHeight - 16);
+
+      // orbiters
+      player.orbAngle += rawDt * (1.9 + player.orbiters*0.12);
+
+      // shooting
+      autoShoot(rawDt);
+
+      // update bullets
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.x += b.vx * rawDt;
+        b.y += b.vy * rawDt;
+        b.life -= rawDt;
+
+        if (b.life <= 0 || b.x < -120 || b.x > innerWidth+120 || b.y < -120 || b.y > innerHeight+120) {
+          bullets.splice(i,1);
+          continue;
+        }
+      }
+
+      // update enemies
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        if (e.dead) { enemies.splice(i,1); continue; }
+
+        // aim movement
+        const ex = player.x - e.x;
+        const ey = player.y - e.y;
+        const el = Math.hypot(ex,ey) || 1;
+        const ux = ex/el, uy = ey/el;
+
+        let spd = e.speed;
+
+        // boss behavior
+        if (e.kind === 'boss') {
+          // phases as hp decreases
+          const hpPct = e.hp / e.hpMax;
+          if (hpPct < 0.65) spd *= 1.12;
+          if (hpPct < 0.35) spd *= 1.20;
+
+          e.shootCd -= rawDt;
+          e.slamCd  -= rawDt;
+
+          if (e.shootCd <= 0) {
+            e.shootCd = Math.max(0.22, 0.75 - world.difficulty*0.02);
+            // triple shot fan
+            const a = Math.atan2(uy, ux);
+            for (const off of [-0.22, 0, 0.22]) {
+              const ca = Math.cos(a + off), sa = Math.sin(a + off);
+              bullets.push({
+                x: e.x + ca*(e.r+8),
+                y: e.y + sa*(e.r+8),
+                vx: ca * (560 + world.difficulty*25),
+                vy: sa * (560 + world.difficulty*25),
+                r: 6.4,
+                dmg: e.dmg,
+                pierce: 0,
+                life: 2.2,
+                from:'enemy'
+              });
+            }
+          }
+
+          if (e.slamCd <= 0 && el < 160) {
+            e.slamCd = 3.1;
+            // slam: burst + knock
+            world.shake = Math.min(22, world.shake + 14);
+            addParticles(e.x, e.y, 40, 1.25);
+            playerTakeDamage(e.dmg * 0.9);
+            // knock player away
+            player.vx -= ux * 680;
+            player.vy -= uy * 680;
+          }
+        }
+
+        // spitter shooting
+        if (e.kind === 'spitter') {
+          e.shootCd -= rawDt;
+          if (e.shootCd <= 0) {
+            e.shootCd = rand(0.95, 1.65) / (1 + world.difficulty*0.05);
+            enemyShoot(e);
+          }
+          // keep medium distance: slightly strafe if too close
+          if (el < 220) spd *= 0.72;
+        }
+
+        // knockback impulses decay
+        e.kx *= Math.pow(0.0001, rawDt);
+        e.ky *= Math.pow(0.0001, rawDt);
+
+        e.vx = ux * spd + e.kx;
+        e.vy = uy * spd + e.ky;
+
+        e.x += e.vx * rawDt;
+        e.y += e.vy * rawDt;
+
+        e.hit = Math.max(0, e.hit - rawDt);
+
+        // collide with player (body hit)
+        const rr = (e.r + player.r);
+        if (dist2(e.x,e.y, player.x,player.y) < rr*rr) {
+          // push apart
+          const push = 1 / (el || 1);
+          e.x -= ux * 12 * push;
+          e.y -= uy * 12 * push;
+          player.vx -= ux * 240;
+          player.vy -= uy * 240;
+          playerTakeDamage(e.dmg * rawDt * 1.35);
+        }
+      }
+
+      // orbiters hit
+      if (player.orbiters > 0) {
+        for (let k=0; k<player.orbiters; k++) {
+          const ang = player.orbAngle + (k * (Math.PI*2/player.orbiters));
+          const ox = player.x + Math.cos(ang) * (36 + player.orbiters*2);
+          const oy = player.y + Math.sin(ang) * (36 + player.orbiters*2);
+          const orbR = 9;
+
+          for (const e of enemies) {
+            if (e.dead) continue;
+            const rr = (e.r + orbR);
+            if (dist2(ox,oy,e.x,e.y) < rr*rr) {
+              const dmg = 6.5 + player.orbiters*1.6 + world.difficulty*0.4;
+              const dx = e.x - ox, dy = e.y - oy;
+              const len = Math.hypot(dx,dy) || 1;
+              dealDamageToEnemy(e, dmg*rawDt*9.0, (dx/len)*120, (dy/len)*120);
+            }
+          }
+        }
+      }
+
+      // bullet collisions
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+
+        if (b.from === 'player') {
+          // hit enemies
+          let hitSomething = false;
+
+          for (const e of enemies) {
+            if (e.dead) continue;
+            const rr = e.r + b.r;
+            if (dist2(b.x,b.y,e.x,e.y) < rr*rr) {
+              hitSomething = true;
+
+              // crit
+              const isCrit = Math.random() < player.crit;
+              const dmg = b.dmg * (isCrit ? 2.2 : 1);
+
+              const dx = e.x - b.x, dy = e.y - b.y;
+              const len = Math.hypot(dx,dy) || 1;
+              const kx = (dx/len) * player.knock;
+              const ky = (dy/len) * player.knock;
+
+              dealDamageToEnemy(e, dmg, kx, ky);
+
+              // pierce consumption
+              if (b.pierce > 0) {
+                b.pierce -= 1;
+              } else {
+                bullets.splice(i,1);
+              }
+
+              // small impact
+              addParticles(b.x,b.y, 4, 0.8);
+              break;
+            }
+          }
+          if (!hitSomething) {
+            // no op
+          }
+
+        } else {
+          // enemy bullet hits player
+          const rr = player.r + b.r;
+          if (dist2(b.x,b.y, player.x,player.y) < rr*rr) {
+            bullets.splice(i,1);
+            playerTakeDamage(b.dmg);
+          }
+        }
+      }
+
+      // pickups
+      for (let i = pickups.length - 1; i >= 0; i--) {
+        const p = pickups[i];
+        p.t += rawDt;
+
+        // magnet pull
+        const m = 60 + player.magnet;
+        const dx = player.x - p.x;
+        const dy = player.y - p.y;
+        const d = Math.hypot(dx,dy) || 1;
+
+        if (d < m) {
+          const pull = (1 - d/m);
+          p.vx += (dx/d) * (460 + player.magnet*5) * pull * rawDt;
+          p.vy += (dy/d) * (460 + player.magnet*5) * pull * rawDt;
+        }
+
+        p.vx *= Math.pow(0.0001, rawDt);
+        p.vy *= Math.pow(0.0001, rawDt);
+
+        p.x += p.vx * rawDt;
+        p.y += p.vy * rawDt;
+
+        // collect
+        if (d < player.r + p.r + 6) {
+          if (p.kind === 'xp') {
+            gainXP(p.value);
+            player.score += 2;
+          } else {
+            player.hp = Math.min(player.hpMax, player.hp + p.value);
+            setHint(`Лечение +${p.value}`, 1200);
+          }
+          pickups.splice(i,1);
+        } else if (p.t > 18) {
+          pickups.splice(i,1);
+        }
+      }
+
+      // particles
+      for (let i=particles.length-1;i>=0;i--) {
+        const pt = particles[i];
+        pt.t += rawDt;
+        pt.x += pt.vx * rawDt;
+        pt.y += pt.vy * rawDt;
+        pt.vx *= Math.pow(0.001, rawDt);
+        pt.vy *= Math.pow(0.001, rawDt);
+        if (pt.t >= pt.life) particles.splice(i,1);
+      }
+
+      // difficulty score drip
+      player.score += rawDt * (2 + world.difficulty*0.35);
+
+      // hi score update lightly
+      if ((player.score|0) > hiScore) {
+        hiScore = player.score|0;
+        localStorage.setItem(LS_KEY, String(hiScore));
+      }
+    }
+
+    render();
+    requestAnimationFrame(update);
+  }
+
+  // ---------- Render ----------
+  function render() {
+    const dpr = canvas._dpr || 1;
+    const W = canvas.width, H = canvas.height;
+
+    // screen-space -> canvas-space scale
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // camera shake
+    let sx=0, sy=0;
+    if (world.shake > 0 && !paused) {
+      world.shake = Math.max(0, world.shake - 20*world.dt);
+      sx = rand(-world.shake, world.shake);
+      sy = rand(-world.shake, world.shake);
+    }
+    ctx.translate(sx, sy);
+
+    // background
+    ctx.fillStyle = '#070912';
+    ctx.fillRect(-1000, -1000, innerWidth+2000, innerHeight+2000);
+
+    // subtle grid
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = '#1a2140';
+    ctx.lineWidth = 1;
+    const step = 44;
+    for (let x = ((-sx % step)+step)%step; x < innerWidth; x += step) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, innerHeight); ctx.stroke();
+    }
+    for (let y = ((-sy % step)+step)%step; y < innerHeight; y += step) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(innerWidth, y); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // pickups
+    for (const p of pickups) {
+      ctx.beginPath();
+      ctx.fillStyle = (p.kind==='xp') ? '#6be4ff' : '#7dff9d';
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r+6, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // bullets
+    for (const b of bullets) {
+      ctx.beginPath();
+      ctx.fillStyle = (b.from==='player') ? '#eaf0ff' : '#ff7a88';
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // enemies
+    for (const e of enemies) {
+      // color by type
+      let fill = '#b7c4ff';
+      if (e.kind==='runner') fill = '#ffd36b';
+      else if (e.kind==='tank') fill = '#7dff9d';
+      else if (e.kind==='spitter') fill = '#ff7a88';
+      else if (e.kind==='boss') fill = '#d39bff';
+
+      // body
+      ctx.beginPath();
+      ctx.fillStyle = fill;
+      ctx.globalAlpha = e.hit>0 ? 0.65 : 0.95;
+      ctx.arc(e.x, e.y, e.r, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // hp bar
+      const w = e.r*2.1;
+      const h = 5;
+      const pct = clamp(e.hp/e.hpMax, 0, 1);
+      ctx.fillStyle = 'rgba(0,0,0,.35)';
+      ctx.fillRect(e.x - w/2, e.y - e.r - 14, w, h);
+      ctx.fillStyle = 'rgba(255,255,255,.86)';
+      ctx.fillRect(e.x - w/2, e.y - e.r - 14, w*pct, h);
+    }
+
+    // orbiters
+    if (player.orbiters > 0) {
+      for (let k=0; k<player.orbiters; k++) {
+        const ang = player.orbAngle + (k * (Math.PI*2/player.orbiters));
+        const ox = player.x + Math.cos(ang) * (36 + player.orbiters*2);
+        const oy = player.y + Math.sin(ang) * (36 + player.orbiters*2);
+        ctx.beginPath();
+        ctx.fillStyle = '#6be4ff';
+        ctx.arc(ox, oy, 7.5, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 0.25;
+        ctx.beginPath();
+        ctx.arc(ox, oy, 16, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // player
+    // shield ring
+    if (player.shieldMax > 0) {
+      const pct = clamp(player.shield / player.shieldMax, 0, 1);
+      ctx.globalAlpha = 0.30 + 0.55*pct;
+      ctx.strokeStyle = '#6be4ff';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.r + 8, -Math.PI/2, -Math.PI/2 + Math.PI*2*pct);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.beginPath();
+    ctx.fillStyle = '#eaf0ff';
+    ctx.arc(player.x, player.y, player.r, 0, Math.PI*2);
+    ctx.fill();
+
+    // aim indicator to finger
+    ctx.globalAlpha = 0.15;
+    ctx.strokeStyle = '#eaf0ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.lineTo(input.x, input.y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // particles
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = '#eaf0ff';
+    for (const pt of particles) {
+      const a = 1 - (pt.t / pt.life);
+      ctx.globalAlpha = 0.85 * a;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // UI text
+    const dashIn = Math.max(0, dashReady - world.timeAlive);
+    const hpPct = clamp(player.hp / player.hpMax, 0, 1);
+    const shPct = player.shieldMax > 0 ? clamp(player.shield / player.shieldMax, 0, 1) : 0;
+
+    elStats.textContent =
+      `HP ${Math.round(player.hp)}/${player.hpMax}` +
+      (player.shieldMax>0 ? ` | SH ${Math.round(player.shield)}/${player.shieldMax}` : ``) +
+      ` | LV ${level} (${xp}/${xpNext})` +
+      ` | Dash ${dashIn>0 ? dashIn.toFixed(1)+'s' : 'READY'}`;
+
+    elScore.textContent =
+      `Score ${(player.score|0)} | High ${hiScore|0} | Time ${formatTime(world.timeAlive)}${world.bossAlive ? ' | BOSS' : ''}`;
+  }
+
+  // Start
+  resetGame();
+  requestAnimationFrame(update);
+
+  // Small onboarding hints
+  setTimeout(()=>setHint('Подбирай кристаллы XP. На уровень — апгрейд.', 2400), 1400);
+  setTimeout(()=>setHint('Двойной тап: dash. Особенно полезен на боссе.', 2400), 5200);
+
+})();
+</script>
+</body>
+</html>
