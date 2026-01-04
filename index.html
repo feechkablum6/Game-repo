@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>SVG TD: Эволюция</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="c"></canvas>
+
+    <div id="hud">
+      <div class="row top">
+        <div class="pill" id="statGold">💰 0</div>
+        <div class="pill" id="statLives">❤️ 0</div>
+        <div class="pill" id="statWave">🌊 0</div>
+        <button class="pill btn" id="btnPause">⏸</button>
+        <button class="pill btn" id="btnSpeed">x1</button>
+      </div>
+
+      <div class="row mid">
+        <button class="big" id="btnNext">СТАРТ ВОЛНЫ</button>
+        <label class="toggle">
+          <input type="checkbox" id="autoWave">
+          <span>Автоволны</span>
+        </label>
+      </div>
+
+      <div class="row build">
+        <div class="label">Строительство:</div>
+        <button class="card" data-build="archer" id="buildArcher">
+          <div class="cardTitle">Лучник</div>
+          <div class="cardSub" id="costArcher">—</div>
+        </button>
+        <button class="card" data-build="mage" id="buildMage">
+          <div class="cardTitle">Маг</div>
+          <div class="cardSub" id="costMage">—</div>
+        </button>
+        <button class="card" data-build="cannon" id="buildCannon">
+          <div class="cardTitle">Пушка</div>
+          <div class="cardSub" id="costCannon">—</div>
+        </button>
+        <button class="card ghost" id="buildCancel">
+          <div class="cardTitle">Отмена</div>
+          <div class="cardSub">тап по земле</div>
+        </button>
+      </div>
+
+      <div id="panel" class="panel hidden">
+        <div class="panelTitle" id="panelTitle">Башня</div>
+        <div class="panelStats" id="panelStats">—</div>
+
+        <div class="panelBtns">
+          <button class="pill btnWide" id="btnUpgrade">⬆️ Улучшить</button>
+          <button class="pill btnWide hidden" id="btnEvolveA">🧬 Эволюция A</button>
+          <button class="pill btnWide hidden" id="btnEvolveB">🧬 Эволюция B</button>
+          <button class="pill btnWide danger" id="btnSell">🪙 Продать</button>
+        </div>
+
+        <div class="hint" id="panelHint">
+          Тап по башне — открыть. Тап по пустой клетке — закрыть.
+        </div>
+      </div>
+
+      <div id="toast" class="toast hidden"></div>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
